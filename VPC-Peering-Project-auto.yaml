@@ -1,0 +1,220 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to create 2 VPCs, subnets, route tables, security groups, EC2 instances, and VPC peering
+
+Parameters:
+  KeyName:
+    Type: String
+    Default: mykey
+    Description: Name of an existing EC2 KeyPair to enable SSH access
+
+Resources:
+  # VPC A
+  VPCA:
+    Type: AWS::EC2::VPC
+    Properties: 
+      CidrBlock: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: VPC-A
+
+  # VPC B
+  VPCB:
+    Type: AWS::EC2::VPC
+    Properties: 
+      CidrBlock: 20.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: VPC-B
+
+  # Subnet in VPC-A (Private)
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties: 
+      VpcId: !Ref VPCA
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: my-subnet-VPC-A-private
+
+  # Subnet in VPC-B (Public)
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties: 
+      VpcId: !Ref VPCB
+      CidrBlock: 20.0.0.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      Tags:
+        - Key: Name
+          Value: my-subnet-VPC-B-public
+
+  # Internet Gateway for VPC-B
+  InternetGatewayB:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: VPC-B-InternetGateway
+
+  # Attach Internet Gateway to VPC-B
+  AttachGatewayB:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: 
+      VpcId: !Ref VPCB
+      InternetGatewayId: !Ref InternetGatewayB
+
+  # Route Table for VPC-A (Private)
+  RouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      VpcId: !Ref VPCA
+      Tags:
+        - Key: Name
+          Value: VPC-A-PrivateRoute
+
+  # Route Table for VPC-B (Public)
+  RouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties: 
+      VpcId: !Ref VPCB
+      Tags:
+        - Key: Name
+          Value: VPC-B-PublicRoute
+
+  # Route for Internet Gateway in VPC-B Route Table
+  RouteToInternet:
+    Type: AWS::EC2::Route
+    Properties: 
+      RouteTableId: !Ref RouteTableB
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGatewayB
+
+  # Associate Route Table A with Subnet A
+  SubnetRouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: 
+      SubnetId: !Ref SubnetA
+      RouteTableId: !Ref RouteTableA
+
+  # Associate Route Table B with Subnet B
+  SubnetRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: 
+      SubnetId: !Ref SubnetB
+      RouteTableId: !Ref RouteTableB
+
+  # Security Group in VPC-A (SSH Access)
+  SecurityGroupA:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: Allow SSH and ICMP in VPC-A
+      VpcId: !Ref VPCA
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: SSHAccess
+
+  # Security Group in VPC-B (SSH Access)
+  SecurityGroupB:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: Allow SSH and ICMP in VPC-B
+      VpcId: !Ref VPCB
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: SSHAccess
+
+  # EC2 Instance in VPC-A (Private Subnet)
+  EC2InstanceA:
+    Type: AWS::EC2::Instance
+    Properties: 
+      InstanceType: t2.micro
+      KeyName: !Ref KeyName
+      ImageId: ami-08d8ac128e0a1b91c
+      SubnetId: !Ref SubnetA
+      SecurityGroupIds:
+        - !Ref SecurityGroupA
+      Tags:
+        - Key: Name
+          Value: EC2-Private-VPC-A
+
+  # EC2 BastionHost in VPC-B (Public Subnet)
+  BastionHost:
+    Type: AWS::EC2::Instance
+    Properties: 
+      InstanceType: t2.micro
+      KeyName: !Ref KeyName
+      ImageId: ami-08d8ac128e0a1b91c
+      SubnetId: !Ref SubnetB
+      SecurityGroupIds:
+        - !Ref SecurityGroupB
+      Tags:
+        - Key: Name
+          Value: BastionHost
+
+  # Elastic IP for BastionHost
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  # Associate Elastic IP with BastionHost
+  EIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt ElasticIP.AllocationId
+      InstanceId: !Ref BastionHost
+
+  # VPC Peering Connection between VPC-A and VPC-B
+  VPCPeeringConnection:
+    Type: AWS::EC2::VPCPeeringConnection
+    Properties: 
+      VpcId: !Ref VPCA
+      PeerVpcId: !Ref VPCB
+      Tags:
+        - Key: Name
+          Value: VPC-Peering-A-B
+
+  # Route for VPC Peering in VPC-A Route Table
+  RouteToVPCB:
+    Type: AWS::EC2::Route
+    Properties: 
+      RouteTableId: !Ref RouteTableA
+      DestinationCidrBlock: 20.0.0.0/16
+      VpcPeeringConnectionId: !Ref VPCPeeringConnection
+
+  # Route for VPC Peering in VPC-B Route Table
+  RouteToVPCA:
+    Type: AWS::EC2::Route
+    Properties: 
+      RouteTableId: !Ref RouteTableB
+      DestinationCidrBlock: 10.0.0.0/16
+      VpcPeeringConnectionId: !Ref VPCPeeringConnection
+
+Outputs:
+  EC2InstanceAId:
+    Description: "EC2 Instance in VPC-A (Private)"
+    Value: !Ref EC2InstanceA
+  BastionHostId:
+    Description: "Bastion Host EC2 Instance in VPC-B (Public)"
+    Value: !Ref BastionHost
+  ElasticIP:
+    Description: "Elastic IP for BastionHost"
+    Value: !Ref ElasticIP
